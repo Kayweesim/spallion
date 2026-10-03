@@ -33,6 +33,8 @@ Dev-only shortcut: `http://localhost:5173/?fly=300` launches the rocket straight
 2. In the Vercel project, open **Storage → Create Database → Neon** and connect it to the project.
    This sets `DATABASE_URL` for every environment. If you created the Neon database yourself, add
    `DATABASE_URL` under **Settings → Environment Variables**, using Neon's pooled connection string.
+   The database is in **Washington, D.C.** (AWS us-east-1) with Neon Auth off. `vercel.json` pins
+   the functions to Vercel's matching region (`iad1`) so they run next to the database.
 3. Deploy. The tables are created automatically on the first API request (`api/_lib/db.ts`).
 
 ## How it fits together
