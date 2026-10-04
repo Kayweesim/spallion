@@ -56,11 +56,15 @@ function shuffled<T>(items: T[], rand: () => number): T[] {
   return a;
 }
 
-// One fixed shuffle of every prompt; each day takes the next 7, so prompts don't
-// repeat until the whole deck has been used.
+// One fixed shuffle of the first 100 prompts; each day takes the next 7, so prompts don't
+// repeat until the whole deck has been used. The deck is capped because adding prompts
+// would reshuffle it and swap the prompts of a day that's already live (the server
+// re-scores submissions against them). Newer prompts still appear in unlimited and
+// multiplayer games.
 const DAILY_EPOCH = Date.UTC(2026, 0, 1);
+const DAILY_DECK_SIZE = 100;
 const dailyDeck = shuffled(
-  [...PROMPTS].sort((a, b) => a.id.localeCompare(b.id)),
+  [...PROMPTS].sort((a, b) => a.id.localeCompare(b.id)).slice(0, DAILY_DECK_SIZE),
   mulberry32(hashString('spallion:daily:v1')),
 );
 
