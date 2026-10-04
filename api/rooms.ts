@@ -2,11 +2,13 @@ import { db, toMs, toNum, type Db } from './_lib/db.js';
 import { HttpError, callsign, handle, json, playerId, readJson } from './_lib/http.js';
 import { TIERS, getPrompt } from '../src/game/data.js';
 import { matchAnswer } from '../src/game/match.js';
-import { MP, ROOM_CODE_ALPHABET, isRoomCode, phaseAt, revealedRounds, type RoomState } from '../src/game/multiplayer.js';
+import { GAME_MS, MP, ROOM_CODE_ALPHABET, isRoomCode, phaseAt, revealedRounds, type RoomState } from '../src/game/multiplayer.js';
 import { pickPrompts } from '../src/game/session.js';
 import type { TierId } from '../src/game/types.js';
 
+// Rooms expire this long after they were created or last launched, so a crew can keep playing.
 const ROOM_TTL = `interval '6 hours'`;
+const LAST_ACTIVE = 'coalesce(start_at, created_at)';
 
 interface Room {
   code: string;
@@ -18,7 +20,7 @@ interface Room {
 async function loadRoom(sql: Db, code: unknown): Promise<Room> {
   if (!isRoomCode(code)) throw new HttpError(400, 'Room codes are 5 letters/numbers');
   const [r] = await sql.query(
-    `select code, host_id, prompt_ids, start_at from rooms where code = $1 and created_at > now() - ${ROOM_TTL}`,
+    `select code, host_id, prompt_ids, start_at from rooms where code = $1 and ${LAST_ACTIVE} > now() - ${ROOM_TTL}`,
     [code],
   );
   if (!r) throw new HttpError(404, 'No room with that code');
@@ -32,7 +34,7 @@ async function roomState(sql: Db, room: Room, me: string | null): Promise<RoomSt
   const current = phase.kind === 'ask' ? phase.round : -1;
 
   const players = await sql.query(
-    `select player_id, name from room_players where code = $1 order by joined_at, player_id`,
+    `select player_id, name, joined_at from room_players where code = $1 order by joined_at, player_id`,
     [room.code],
   );
   const answers = await sql.query(
@@ -79,6 +81,9 @@ async function roomState(sql: Db, room: Room, me: string | null): Promise<RoomSt
         name: p.name as string,
         you: pid === me,
         host: pid === room.hostId,
+        // Joining is only open before launch or after the mission ends, so anyone who
+        // joined before the end was aboard for the whole mission.
+        inGame: room.startAt === null || (toMs(p.joined_at) ?? 0) < room.startAt + GAME_MS,
         score: score.get(pid) ?? 0,
         answeredCurrent: answeredCurrent.has(pid),
       };
@@ -103,7 +108,7 @@ export const GET = handle(async (req) => {
   return json(await roomState(sql, room, pid ? playerId(pid) : null));
 });
 
-/** POST { action: 'create' | 'join' | 'start' | 'answer', ... } */
+/** POST { action: 'create' | 'join' | 'start' | 'answer' | 'leave', ... } */
 export const POST = handle(async (req) => {
   const body = await readJson(req);
   const me = playerId(body.playerId);
@@ -112,7 +117,7 @@ export const POST = handle(async (req) => {
   switch (body.action) {
     case 'create': {
       const name = callsign(body.name);
-      await sql.query(`delete from rooms where created_at < now() - interval '1 day'`);
+      await sql.query(`delete from rooms where ${LAST_ACTIVE} < now() - interval '1 day'`);
       const promptIds = pickPrompts('unlimited').map((p) => p.id).join(',');
       for (let attempt = 0; attempt < 5; attempt++) {
         const code = newCode();
@@ -133,7 +138,8 @@ export const POST = handle(async (req) => {
       const room = await loadRoom(sql, body.code);
       const [already] = await sql.query(`select 1 from room_players where code = $1 and player_id = $2`, [room.code, me]);
       if (!already) {
-        if (room.startAt !== null) throw new HttpError(409, 'That mission has already launched');
+        const phase = phaseAt(room.startAt, Date.now()).kind;
+        if (phase !== 'lobby' && phase !== 'finished') throw new HttpError(409, 'That mission has already launched');
         const [{ n }] = await sql.query(`select count(*) as n from room_players where code = $1`, [room.code]);
         if (toNum(n) >= MP.maxPlayers) throw new HttpError(409, 'That room is full');
       }
@@ -148,9 +154,21 @@ export const POST = handle(async (req) => {
     case 'start': {
       const room = await loadRoom(sql, body.code);
       if (room.hostId !== me) throw new HttpError(403, 'Only the host can launch');
-      if (room.startAt === null) {
-        const startAt = new Date(Date.now() + MP.countdownMs).toISOString();
-        await sql.query(`update rooms set start_at = $2 where code = $1 and start_at is null`, [room.code, startAt]);
+      // Launch from the lobby, or relaunch a finished mission with fresh prompts and the same
+      // crew. One statement, so a double click can't launch twice or wipe a running mission.
+      const now = Date.now();
+      const kind = phaseAt(room.startAt, now).kind;
+      if (kind === 'lobby' || kind === 'finished') {
+        const promptIds = kind === 'lobby' ? room.promptIds : pickPrompts('unlimited', room.promptIds).map((p) => p.id);
+        await sql.query(
+          `with launched as (
+             update rooms set start_at = $2, prompt_ids = $3
+             where code = $1 and (start_at is null or start_at <= $4)
+             returning code
+           )
+           delete from room_answers where code in (select code from launched)`,
+          [room.code, new Date(now + MP.countdownMs).toISOString(), promptIds.join(','), new Date(now - GAME_MS).toISOString()],
+        );
       }
       return json(await roomState(sql, await loadRoom(sql, room.code), me));
     }
@@ -187,6 +205,20 @@ export const POST = handle(async (req) => {
         [room.code, me, round],
       );
       return json({ accepted: true, matched: saved.matched, tier: saved.tier, points: toNum(saved.points) });
+    }
+
+    case 'leave': {
+      const room = await loadRoom(sql, body.code);
+      await sql.query(`delete from room_answers where code = $1 and player_id = $2`, [room.code, me]);
+      await sql.query(`delete from room_players where code = $1 and player_id = $2`, [room.code, me]);
+      await sql.query(`delete from rooms where code = $1 and not exists (select 1 from room_players where code = $1)`, [room.code]);
+      // If the host left, the longest-serving pilot takes over.
+      await sql.query(
+        `update rooms set host_id = (select player_id from room_players where code = $1 order by joined_at, player_id limit 1)
+         where code = $1 and host_id = $2`,
+        [room.code, me],
+      );
+      return json({ left: true });
     }
 
     default:

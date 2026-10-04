@@ -17,7 +17,8 @@ interface Props {
 }
 
 // How often to poll the room in each phase (ms). Phase changes also trigger an immediate fetch.
-const POLL: Record<MpPhase['kind'], number> = { lobby: 2000, countdown: 1000, ask: 2500, reveal: 2000, finished: 0 };
+// Finished rooms keep polling so everyone follows the host into the next mission.
+const POLL: Record<MpPhase['kind'], number> = { lobby: 2000, countdown: 1000, ask: 2500, reveal: 2000, finished: 2000 };
 
 export function MultiRoom({ code, scene, onLeave }: Props) {
   const me = getProfile();
@@ -65,11 +66,25 @@ export function MultiRoom({ code, scene, onLeave }: Props) {
   }, [phaseKey]);
 
   const you = state?.players.find((p) => p.you);
+  // Set when you head back to the lobby from a finished mission (that mission's startAt).
+  const [lobbyAfter, setLobbyAfter] = useState<number | null>(null);
 
   // Fly (or sputter) once per round, when that round's results arrive.
   const flown = useRef(-1);
+
+  // A relaunch brings a new startAt: put the rocket back on the pad for the next mission.
+  const mission = useRef<number | null | undefined>(undefined);
   useEffect(() => {
-    if (!state || !you || phase.kind !== 'reveal' && phase.kind !== 'finished') return;
+    if (!state) return;
+    if (mission.current !== undefined && mission.current !== state.startAt) {
+      flown.current = -1;
+      scene?.reset();
+    }
+    mission.current = state.startAt;
+  }, [state, scene]);
+
+  useEffect(() => {
+    if (!state || !you?.inGame || phase.kind !== 'reveal' && phase.kind !== 'finished') return;
     const r = state.answers.length - 1;
     if (r < 0 || r <= flown.current) return;
     flown.current = r;
@@ -84,6 +99,20 @@ export function MultiRoom({ code, scene, onLeave }: Props) {
     }
   }, [state, you, phase.kind, scene]);
 
+  const leave = () => {
+    api.leaveRoom(code, me.id).catch(() => {}); // best effort; the room expires anyway
+    onLeave();
+  };
+
+  const backToLobby = () => {
+    scene?.reset();
+    setLobbyAfter(state?.startAt ?? null);
+  };
+
+  // Between missions the room shows its lobby to anyone who left the report or just joined.
+  const inLobby =
+    phase.kind === 'lobby' || (phase.kind === 'finished' && (lobbyAfter === state?.startAt || !you?.inGame));
+
   if (!state) {
     return (
       <div className="screen multi">
@@ -96,15 +125,15 @@ export function MultiRoom({ code, scene, onLeave }: Props) {
   return (
     <div className="screen multi-room">
       <div className="flash" aria-hidden="true" />
-      {phase.kind === 'lobby' && <Lobby state={state} onLeave={onLeave} onStarted={setState} />}
+      {inLobby && <Lobby state={state} onLeave={leave} onStarted={setState} />}
       {phase.kind === 'countdown' && <Countdown endsAt={phase.endsAt} serverNow={serverNow} />}
       {phase.kind === 'ask' && (
-        <Ask key={phase.round} state={state} round={phase.round} endsAt={phase.endsAt} serverNow={serverNow} onLeave={onLeave} />
+        <Ask key={phase.round} state={state} round={phase.round} endsAt={phase.endsAt} serverNow={serverNow} onLeave={leave} />
       )}
       {phase.kind === 'reveal' && (
         <Reveal state={state} round={phase.round} endsAt={phase.endsAt} serverNow={serverNow} />
       )}
-      {phase.kind === 'finished' && <Final state={state} onLeave={onLeave} />}
+      {phase.kind === 'finished' && !inLobby && <Final state={state} onLobby={backToLobby} onLeave={leave} />}
       {netError && <p className="q-error net-error">{netError} Retrying…</p>}
     </div>
   );
@@ -161,7 +190,9 @@ function Lobby({ state, onLeave, onStarted }: { state: RoomState; onLeave: () =>
       <p className="q-error" role="alert">{error ?? ' '}</p>
       <div className="results-actions">
         {host ? (
-          <button className="btn btn-primary" onClick={launch}>Launch mission</button>
+          <button className="btn btn-primary" onClick={launch}>
+            {state.startAt === null ? 'Launch mission' : 'Launch next mission'}
+          </button>
         ) : (
           <p className="muted">Waiting for the host to launch…</p>
         )}
@@ -414,9 +445,9 @@ function Standings({ players, limit }: { players: RoomState['players']; limit?: 
 
 // ---------------------------------------------------------------- final
 
-function Final({ state, onLeave }: { state: RoomState; onLeave: () => void }) {
+function Final({ state, onLobby, onLeave }: { state: RoomState; onLobby: () => void; onLeave: () => void }) {
   const root = useRef<HTMLDivElement>(null);
-  const standings = [...state.players].sort((a, b) => b.score - a.score);
+  const standings = state.players.filter((p) => p.inGame).sort((a, b) => b.score - a.score);
   const you = standings.find((p) => p.you);
   const place = you ? standings.filter((p) => p.score > you.score).length + 1 : null;
   const played = useRef(false);
@@ -448,7 +479,8 @@ function Final({ state, onLeave }: { state: RoomState; onLeave: () => void }) {
         <Standings players={standings} />
       </section>
       <div className="results-actions">
-        <button className="btn btn-primary" onClick={onLeave}>New mission</button>
+        <button className="btn btn-primary" onClick={onLobby}>Back to lobby</button>
+        <button className="btn btn-ghost" onClick={onLeave}>Leave room</button>
       </div>
     </div>
   );

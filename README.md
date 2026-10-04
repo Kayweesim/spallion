@@ -5,7 +5,8 @@ A space-themed take on Krillion: 7 prompts, and the rarer your correct answer, t
 - **Daily mission:** the same 7 prompts for everyone, resetting at midnight US Eastern. Scores go to the leaderboard.
   It draws from the first 100 prompts only (see `src/game/session.ts`); the rest appear in unlimited and multiplayer.
 - **Unlimited flight:** random prompts for practice.
-- **Multiplayer:** rooms of up to 30 pilots on a shared clock, with live reveals and standings.
+- **Multiplayer:** rooms of up to 30 pilots on a shared clock, with live reveals and standings. After a
+  mission the crew goes back to the room's lobby, new pilots can join, and the host launches the next one.
 
 Stack: Vite + React + TypeScript, Three.js + GSAP for the scene, Vercel Functions (`api/`) and Neon Postgres.
 
@@ -46,7 +47,7 @@ Dev-only shortcut: `http://localhost:5173/?fly=300` launches the rocket straight
 | `src/game/` | Rules shared by the client and the API: matching, daily schedule, multiplayer timing |
 | `api/scores.ts` | `POST` a daily run. The server re-scores the guesses itself |
 | `api/leaderboard.ts` | `GET ?scope=daily` / `?scope=all` |
-| `api/rooms.ts` | Multiplayer: create / join / start / answer, plus `GET` room state |
+| `api/rooms.ts` | Multiplayer: create / join / start (or relaunch) / answer / leave, plus `GET` room state |
 | `src/scene/` | Three.js launch site, rocket and flight |
 
 Players are anonymous: a random id kept in localStorage, plus a callsign. Files in `src/game/` that

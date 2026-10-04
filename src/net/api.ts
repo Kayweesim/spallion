@@ -72,6 +72,9 @@ export const api = {
 
   answer: (code: string, playerId: string, round: number, guess: string) =>
     request<AnswerResult>('/api/rooms', { body: { action: 'answer', code, playerId, round, guess } }),
+
+  leaveRoom: (code: string, playerId: string) =>
+    request<{ left: true }>('/api/rooms', { body: { action: 'leave', code, playerId } }),
 };
 
 export const errorMessage = (err: unknown) => (err instanceof Error ? err.message : 'Something went wrong');
