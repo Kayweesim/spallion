@@ -13,6 +13,9 @@ export const MP = {
   rounds: ROUNDS_PER_GAME,
 };
 
+/** From the first question opening to the end of the last reveal. */
+export const GAME_MS = MP.rounds * (MP.askMs + MP.revealMs);
+
 export type MpPhase =
   | { kind: 'lobby' }
   | { kind: 'countdown'; endsAt: number }
@@ -24,9 +27,9 @@ export type MpPhase =
 export function phaseAt(startAt: number | null, now: number): MpPhase {
   if (startAt === null) return { kind: 'lobby' };
   if (now < startAt) return { kind: 'countdown', endsAt: startAt };
+  if (now >= startAt + GAME_MS) return { kind: 'finished' };
   const slot = MP.askMs + MP.revealMs;
   const round = Math.floor((now - startAt) / slot);
-  if (round >= MP.rounds) return { kind: 'finished' };
   const askEnds = startAt + round * slot + MP.askMs;
   return now < askEnds
     ? { kind: 'ask', round, endsAt: askEnds }
@@ -58,6 +61,8 @@ export interface RoomPlayer {
   name: string;
   you: boolean;
   host: boolean;
+  /** False for players who joined after the current (or last) mission launched. */
+  inGame: boolean;
   score: number;
   answeredCurrent: boolean;
 }
