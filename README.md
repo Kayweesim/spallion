@@ -3,6 +3,7 @@
 A space-themed take on Krillion: 7 prompts, and the rarer your correct answer, the further your rocket flies.
 
 - **Daily mission:** the same 7 prompts for everyone, resetting at midnight US Eastern. Scores go to the leaderboard.
+  It draws from the first 100 prompts only (see `src/game/session.ts`); the rest appear in unlimited and multiplayer.
 - **Unlimited flight:** random prompts for practice.
 - **Multiplayer:** rooms of up to 30 pilots on a shared clock, with live reveals and standings.
 
@@ -41,7 +42,7 @@ Dev-only shortcut: `http://localhost:5173/?fly=300` launches the rocket straight
 
 | Path | What it does |
 | --- | --- |
-| `data/prompts.json` | 100 prompts with tiered answers (`|` separates aliases) |
+| `data/prompts.json` | 164 prompts with tiered answers (`|` separates aliases) |
 | `src/game/` | Rules shared by the client and the API: matching, daily schedule, multiplayer timing |
 | `api/scores.ts` | `POST` a daily run. The server re-scores the guesses itself |
 | `api/leaderboard.ts` | `GET ?scope=daily` / `?scope=all` |
