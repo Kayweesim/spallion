@@ -88,6 +88,36 @@ export function dailyPrompts(day = todayKey()): Prompt[] {
   return Array.from({ length: ROUNDS_PER_GAME }, (_, i) => deck[(start + i) % len]);
 }
 
+/**
+ * A multiplayer room deals from its own shuffled deck: `pos` is how far into the deck the
+ * room has played, so a crew sees every prompt once before any repeats. When the deck runs
+ * out it's reshuffled for the next cycle; a mission that spans two cycles skips prompts it
+ * already has.
+ */
+export function dealFromDeck(seed: number, pos: number): { prompts: Prompt[]; next: number } {
+  const sorted = [...PROMPTS].sort((a, b) => a.id.localeCompare(b.id));
+  const decks = new Map<number, Prompt[]>();
+  const at = (i: number) => {
+    const cycle = Math.floor(i / sorted.length);
+    let deck = decks.get(cycle);
+    if (!deck) decks.set(cycle, (deck = shuffled(sorted, mulberry32((seed + cycle * 0x9e3779b9) >>> 0))));
+    return deck[i % sorted.length];
+  };
+  const prompts: Prompt[] = [];
+  let i = pos;
+  while (prompts.length < Math.min(ROUNDS_PER_GAME, sorted.length)) {
+    const p = at(i++);
+    if (!prompts.includes(p)) prompts.push(p);
+  }
+  return { prompts, next: i };
+}
+
+/** A random deck seed for a new room. */
+export const newDeckSeed = () => Math.floor(Math.random() * 2 ** 31);
+
+/** Rooms made before decks existed have no stored seed, so derive one from the code. */
+export const deckSeedFor = (code: string) => hashString(`spallion:room:${code}`) & 0x7fffffff;
+
 /** Daily: today's shared set. Unlimited: random, avoiding the last game's prompts. */
 export function pickPrompts(mode: Mode, avoid: string[] = []): Prompt[] {
   if (mode === 'daily') return dailyPrompts();

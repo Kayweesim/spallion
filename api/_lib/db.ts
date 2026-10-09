@@ -33,6 +33,9 @@ const SCHEMA = [
      start_at timestamptz,
      created_at timestamptz not null default now()
    )`,
+  // Each room's own prompt deck: a shuffle seed and how far into it the room has played.
+  `alter table rooms add column if not exists deck_seed integer`,
+  `alter table rooms add column if not exists deck_pos integer not null default 0`,
   `create table if not exists room_players (
      code text not null references rooms(code) on delete cascade,
      player_id uuid not null,

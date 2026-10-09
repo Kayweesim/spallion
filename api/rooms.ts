@@ -3,7 +3,7 @@ import { HttpError, callsign, handle, json, playerId, readJson } from './_lib/ht
 import { TIERS, getPrompt } from '../src/game/data.js';
 import { matchAnswer } from '../src/game/match.js';
 import { GAME_MS, MP, ROOM_CODE_ALPHABET, isRoomCode, phaseAt, revealedRounds, type RoomState } from '../src/game/multiplayer.js';
-import { pickPrompts } from '../src/game/session.js';
+import { dealFromDeck, deckSeedFor, newDeckSeed } from '../src/game/session.js';
 import type { TierId } from '../src/game/types.js';
 
 // Rooms expire this long after they were created or last launched, so a crew can keep playing.
@@ -15,16 +15,25 @@ interface Room {
   hostId: string;
   promptIds: string[];
   startAt: number | null;
+  deckSeed: number;
+  deckPos: number;
 }
 
 async function loadRoom(sql: Db, code: unknown): Promise<Room> {
   if (!isRoomCode(code)) throw new HttpError(400, 'Room codes are 5 letters/numbers');
   const [r] = await sql.query(
-    `select code, host_id, prompt_ids, start_at from rooms where code = $1 and ${LAST_ACTIVE} > now() - ${ROOM_TTL}`,
+    `select code, host_id, prompt_ids, start_at, deck_seed, deck_pos from rooms where code = $1 and ${LAST_ACTIVE} > now() - ${ROOM_TTL}`,
     [code],
   );
   if (!r) throw new HttpError(404, 'No room with that code');
-  return { code: r.code as string, hostId: r.host_id as string, promptIds: (r.prompt_ids as string).split(','), startAt: toMs(r.start_at) };
+  return {
+    code: r.code as string,
+    hostId: r.host_id as string,
+    promptIds: (r.prompt_ids as string).split(','),
+    startAt: toMs(r.start_at),
+    deckSeed: r.deck_seed == null ? deckSeedFor(r.code as string) : toNum(r.deck_seed),
+    deckPos: toNum(r.deck_pos),
+  };
 }
 
 async function roomState(sql: Db, room: Room, me: string | null): Promise<RoomState> {
@@ -118,12 +127,15 @@ export const POST = handle(async (req) => {
     case 'create': {
       const name = callsign(body.name);
       await sql.query(`delete from rooms where ${LAST_ACTIVE} < now() - interval '1 day'`);
-      const promptIds = pickPrompts('unlimited').map((p) => p.id).join(',');
+      const seed = newDeckSeed();
+      const first = dealFromDeck(seed, 0);
+      const promptIds = first.prompts.map((p) => p.id).join(',');
       for (let attempt = 0; attempt < 5; attempt++) {
         const code = newCode();
         const made = await sql.query(
-          `insert into rooms (code, host_id, prompt_ids) values ($1, $2, $3) on conflict (code) do nothing returning code`,
-          [code, me, promptIds],
+          `insert into rooms (code, host_id, prompt_ids, deck_seed, deck_pos) values ($1, $2, $3, $4, $5)
+           on conflict (code) do nothing returning code`,
+          [code, me, promptIds, seed, first.next],
         );
         if (made.length) {
           await sql.query(`insert into room_players (code, player_id, name) values ($1, $2, $3)`, [code, me, name]);
@@ -154,20 +166,29 @@ export const POST = handle(async (req) => {
     case 'start': {
       const room = await loadRoom(sql, body.code);
       if (room.hostId !== me) throw new HttpError(403, 'Only the host can launch');
-      // Launch from the lobby, or relaunch a finished mission with fresh prompts and the same
-      // crew. One statement, so a double click can't launch twice or wipe a running mission.
+      // Launch from the lobby, or relaunch a finished mission with the next prompts from the
+      // room's deck and the same crew. One statement, so a double click can't launch twice or
+      // wipe a running mission.
       const now = Date.now();
       const kind = phaseAt(room.startAt, now).kind;
       if (kind === 'lobby' || kind === 'finished') {
-        const promptIds = kind === 'lobby' ? room.promptIds : pickPrompts('unlimited', room.promptIds).map((p) => p.id);
+        const deal = kind === 'lobby' ? null : dealFromDeck(room.deckSeed, room.deckPos);
+        const promptIds = deal ? deal.prompts.map((p) => p.id) : room.promptIds;
         await sql.query(
           `with launched as (
-             update rooms set start_at = $2, prompt_ids = $3
+             update rooms set start_at = $2, prompt_ids = $3, deck_seed = $5, deck_pos = $6
              where code = $1 and (start_at is null or start_at <= $4)
              returning code
            )
            delete from room_answers where code in (select code from launched)`,
-          [room.code, new Date(now + MP.countdownMs).toISOString(), promptIds.join(','), new Date(now - GAME_MS).toISOString()],
+          [
+            room.code,
+            new Date(now + MP.countdownMs).toISOString(),
+            promptIds.join(','),
+            new Date(now - GAME_MS).toISOString(),
+            room.deckSeed,
+            deal ? deal.next : room.deckPos,
+          ],
         );
       }
       return json(await roomState(sql, await loadRoom(sql, room.code), me));
