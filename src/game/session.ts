@@ -1,4 +1,4 @@
-import { PROMPTS } from './data.js';
+import { LEGACY_PROMPTS, PROMPTS } from './data.js';
 import { ROUNDS_PER_GAME, type Mode, type Prompt } from './types.js';
 
 /** The daily mission rolls over at midnight US Eastern for everyone, client and server alike. */
@@ -56,23 +56,36 @@ function shuffled<T>(items: T[], rand: () => number): T[] {
   return a;
 }
 
-// One fixed shuffle of the first 100 prompts; each day takes the next 7, so prompts don't
-// repeat until the whole deck has been used. The deck is capped because adding prompts
-// would reshuffle it and swap the prompts of a day that's already live (the server
-// re-scores submissions against them). Newer prompts still appear in unlimited and
-// multiplayer games.
+// Each daily deck is one fixed shuffle; each day takes the next 7, so prompts don't repeat
+// until the whole deck has been used. A deck never changes once it's live: adding prompts
+// would reshuffle it and swap the prompts of a day that's already been played (the server
+// re-scores submissions against them). Prompts added later still appear in unlimited and
+// multiplayer games right away.
 const DAILY_EPOCH = Date.UTC(2026, 0, 1);
-const DAILY_DECK_SIZE = 100;
-const dailyDeck = shuffled(
-  [...PROMPTS].sort((a, b) => a.id.localeCompare(b.id)).slice(0, DAILY_DECK_SIZE),
+
+// Days before the switch keep dealing from the first 100 prompts of prompts.json.
+const LEGACY_DECK = shuffled(
+  [...LEGACY_PROMPTS].sort((a, b) => a.id.localeCompare(b.id)).slice(0, 100),
   mulberry32(hashString('spallion:daily:v1')),
 );
 
+// From this day on, the daily deals from prompts2.json, capped at the 48 prompts it shipped with.
+const SET2_START = '2026-10-12';
+const SET2_DECK_SIZE = 48;
+const SET2_DECK = shuffled(
+  [...PROMPTS].sort((a, b) => a.id.localeCompare(b.id)).slice(0, SET2_DECK_SIZE),
+  mulberry32(hashString('spallion:daily:v2')),
+);
+
+const dayNumber = (day: string, epoch: number) => Math.round((Date.parse(`${day}T00:00:00Z`) - epoch) / 86_400_000);
+
 export function dailyPrompts(day = todayKey()): Prompt[] {
-  const n = Math.round((Date.parse(`${day}T00:00:00Z`) - DAILY_EPOCH) / 86_400_000);
-  const len = dailyDeck.length;
+  const set2 = day >= SET2_START;
+  const deck = set2 ? SET2_DECK : LEGACY_DECK;
+  const n = dayNumber(day, set2 ? Date.parse(`${SET2_START}T00:00:00Z`) : DAILY_EPOCH);
+  const len = deck.length;
   const start = (((n * ROUNDS_PER_GAME) % len) + len) % len;
-  return Array.from({ length: ROUNDS_PER_GAME }, (_, i) => dailyDeck[(start + i) % len]);
+  return Array.from({ length: ROUNDS_PER_GAME }, (_, i) => deck[(start + i) % len]);
 }
 
 /** Daily: today's shared set. Unlimited: random, avoiding the last game's prompts. */

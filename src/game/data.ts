@@ -1,12 +1,19 @@
 // Shared with the serverless API, so relative imports carry explicit .js extensions (Node ESM).
-import raw from '../../data/prompts.json' with { type: 'json' };
+import legacy from '../../data/prompts.json' with { type: 'json' };
+import raw from '../../data/prompts2.json' with { type: 'json' };
 import type { Prompt, Tier, TierId } from './types.js';
 
 export const TIERS = raw.tiers as Record<TierId, Tier>;
+/** The prompts games deal from now (prompts2.json). */
 export const PROMPTS = raw.prompts as unknown as Prompt[];
+/**
+ * The first set (prompts.json), no longer dealt. Still looked up by id so past daily
+ * missions, saved results and rooms created before the switch keep their prompts.
+ */
+export const LEGACY_PROMPTS = legacy.prompts as unknown as Prompt[];
 export const ALIAS_SEPARATOR = raw.aliasSeparator;
 
-const byId = new Map(PROMPTS.map((p) => [p.id, p]));
+const byId = new Map([...LEGACY_PROMPTS, ...PROMPTS].map((p) => [p.id, p]));
 
 export function getPrompt(id: string): Prompt | undefined {
   return byId.get(id);
