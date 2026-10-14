@@ -1,6 +1,6 @@
 import { db, toMs, toNum, type Db } from './_lib/db.js';
 import { HttpError, callsign, handle, json, playerId, readJson } from './_lib/http.js';
-import { TIERS, getPrompt } from '../src/game/data.js';
+import { PROMPT_SET, TIERS, getPrompt } from '../src/game/data.js';
 import { matchAnswer } from '../src/game/match.js';
 import { GAME_MS, MP, ROOM_CODE_ALPHABET, isRoomCode, phaseAt, revealedRounds, type RoomState } from '../src/game/multiplayer.js';
 import { dealFromDeck, deckSeedFor, newDeckSeed } from '../src/game/session.js';
@@ -22,7 +22,7 @@ interface Room {
 async function loadRoom(sql: Db, code: unknown): Promise<Room> {
   if (!isRoomCode(code)) throw new HttpError(400, 'Room codes are 5 letters/numbers');
   const [r] = await sql.query(
-    `select code, host_id, prompt_ids, start_at, deck_seed, deck_pos from rooms where code = $1 and ${LAST_ACTIVE} > now() - ${ROOM_TTL}`,
+    `select code, host_id, prompt_ids, start_at, deck_seed, deck_pos, deck_set from rooms where code = $1 and ${LAST_ACTIVE} > now() - ${ROOM_TTL}`,
     [code],
   );
   if (!r) throw new HttpError(404, 'No room with that code');
@@ -32,7 +32,8 @@ async function loadRoom(sql: Db, code: unknown): Promise<Room> {
     promptIds: (r.prompt_ids as string).split(','),
     startAt: toMs(r.start_at),
     deckSeed: r.deck_seed == null ? deckSeedFor(r.code as string) : toNum(r.deck_seed),
-    deckPos: toNum(r.deck_pos),
+    // A position into an older prompt set means nothing in the current one, so start over.
+    deckPos: r.deck_set === PROMPT_SET ? toNum(r.deck_pos) : 0,
   };
 }
 
@@ -133,9 +134,9 @@ export const POST = handle(async (req) => {
       for (let attempt = 0; attempt < 5; attempt++) {
         const code = newCode();
         const made = await sql.query(
-          `insert into rooms (code, host_id, prompt_ids, deck_seed, deck_pos) values ($1, $2, $3, $4, $5)
+          `insert into rooms (code, host_id, prompt_ids, deck_seed, deck_pos, deck_set) values ($1, $2, $3, $4, $5, $6)
            on conflict (code) do nothing returning code`,
-          [code, me, promptIds, seed, first.next],
+          [code, me, promptIds, seed, first.next, PROMPT_SET],
         );
         if (made.length) {
           await sql.query(`insert into room_players (code, player_id, name) values ($1, $2, $3)`, [code, me, name]);
@@ -176,7 +177,7 @@ export const POST = handle(async (req) => {
         const promptIds = deal ? deal.prompts.map((p) => p.id) : room.promptIds;
         await sql.query(
           `with launched as (
-             update rooms set start_at = $2, prompt_ids = $3, deck_seed = $5, deck_pos = $6
+             update rooms set start_at = $2, prompt_ids = $3, deck_seed = $5, deck_pos = $6, deck_set = $7
              where code = $1 and (start_at is null or start_at <= $4)
              returning code
            )
@@ -188,6 +189,7 @@ export const POST = handle(async (req) => {
             new Date(now - GAME_MS).toISOString(),
             room.deckSeed,
             deal ? deal.next : room.deckPos,
+            PROMPT_SET,
           ],
         );
       }

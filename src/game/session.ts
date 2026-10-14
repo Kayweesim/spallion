@@ -1,4 +1,4 @@
-import { LEGACY_PROMPTS, PROMPTS } from './data.js';
+import { LEGACY_PROMPTS, PROMPTS, SET2_PROMPTS } from './data.js';
 import { ROUNDS_PER_GAME, type Mode, type Prompt } from './types.js';
 
 /** The daily mission rolls over at midnight US Eastern for everyone, client and server alike. */
@@ -69,20 +69,22 @@ const LEGACY_DECK = shuffled(
   mulberry32(hashString('spallion:daily:v1')),
 );
 
-// From this day on, the daily deals from prompts2.json, capped at the 48 prompts it shipped with.
-const SET2_START = '2026-10-12';
-const SET2_DECK_SIZE = 48;
-const SET2_DECK = shuffled(
-  [...PROMPTS].sort((a, b) => a.id.localeCompare(b.id)).slice(0, SET2_DECK_SIZE),
-  mulberry32(hashString('spallion:daily:v2')),
-);
+const deckOf = (prompts: Prompt[], size: number, seed: string) =>
+  shuffled([...prompts].sort((a, b) => a.id.localeCompare(b.id)).slice(0, size), mulberry32(hashString(seed)));
+
+// Later sets each take over the daily from their start day, capped at the prompts they
+// shipped with. Newest first. Only ever add an era with a start day in the future.
+const DAILY_ERAS = [
+  { start: '2026-10-17', deck: deckOf(PROMPTS, 48, 'spallion:daily:v3') }, // prompts3.json
+  { start: '2026-10-12', deck: deckOf(SET2_PROMPTS, 48, 'spallion:daily:v2') }, // prompts2.json
+];
 
 const dayNumber = (day: string, epoch: number) => Math.round((Date.parse(`${day}T00:00:00Z`) - epoch) / 86_400_000);
 
 export function dailyPrompts(day = todayKey()): Prompt[] {
-  const set2 = day >= SET2_START;
-  const deck = set2 ? SET2_DECK : LEGACY_DECK;
-  const n = dayNumber(day, set2 ? Date.parse(`${SET2_START}T00:00:00Z`) : DAILY_EPOCH);
+  const era = DAILY_ERAS.find((e) => day >= e.start);
+  const deck = era ? era.deck : LEGACY_DECK;
+  const n = dayNumber(day, era ? Date.parse(`${era.start}T00:00:00Z`) : DAILY_EPOCH);
   const len = deck.length;
   const start = (((n * ROUNDS_PER_GAME) % len) + len) % len;
   return Array.from({ length: ROUNDS_PER_GAME }, (_, i) => deck[(start + i) % len]);

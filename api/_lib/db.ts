@@ -36,6 +36,8 @@ const SCHEMA = [
   // Each room's own prompt deck: a shuffle seed and how far into it the room has played.
   `alter table rooms add column if not exists deck_seed integer`,
   `alter table rooms add column if not exists deck_pos integer not null default 0`,
+  // Which prompt file deck_pos counts through; a room starts its deck over when it changes.
+  `alter table rooms add column if not exists deck_set text`,
   `create table if not exists room_players (
      code text not null references rooms(code) on delete cascade,
      player_id uuid not null,
