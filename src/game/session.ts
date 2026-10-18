@@ -1,4 +1,4 @@
-import { LEGACY_PROMPTS, PROMPTS, SET2_PROMPTS } from './data.js';
+import { LEGACY_PROMPTS, PROMPTS, SET2_PROMPTS, SET3_PROMPTS } from './data.js';
 import { ROUNDS_PER_GAME, type Mode, type Prompt } from './types.js';
 
 /** The daily mission rolls over at midnight US Eastern for everyone, client and server alike. */
@@ -75,7 +75,8 @@ const deckOf = (prompts: Prompt[], size: number, seed: string) =>
 // Later sets each take over the daily from their start day, capped at the prompts they
 // shipped with. Newest first. Only ever add an era with a start day in the future.
 const DAILY_ERAS = [
-  { start: '2026-10-17', deck: deckOf(PROMPTS, 48, 'spallion:daily:v3') }, // prompts3.json
+  { start: '2026-10-20', deck: deckOf(PROMPTS, 48, 'spallion:daily:v4') }, // prompts4.json
+  { start: '2026-10-17', deck: deckOf(SET3_PROMPTS, 48, 'spallion:daily:v3') }, // prompts3.json
   { start: '2026-10-12', deck: deckOf(SET2_PROMPTS, 48, 'spallion:daily:v2') }, // prompts2.json
 ];
 
